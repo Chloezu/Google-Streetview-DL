@@ -7,8 +7,8 @@
 #               and php base                #
 # https://github.com/fdd4s/streetview-dl    #
 #-------------------------------------------#
-# Exterpolation for making my code readable #
-# https://github.com/exterpolation          #
+# Seloris for making my code readable       #
+# https://github.com/allocazione            #
 #-------------------------------------------#
 # Chloezu [me], functional but crappy       #
 # python rewrite of fdd4s' script           #
@@ -18,8 +18,6 @@
 
 """
     TODOs
-
-    - Find some way of cropping older images based on something not vague, such as resolution
     - Rewrite some of the functions to be less jank, and more resiliant to changes on google's side
 """
 
@@ -28,119 +26,173 @@ import requests
 import os
 import shutil
 import subprocess
+import re
 
 
 def get_pano_id() -> str:
+    """
+    Extracts the pano ID from the command-line argument
+    Returns the ID if passed directly, or extracts it from a URL
+    """
     try:
-        # pano ids seem to be 22 chars long, and always have 3D before it
-        if len(sys.argv[1]) == 22:
-            print(f"ID: {sys.argv[1]}")
-            return sys.argv[1]
-
-        # If link, sort for pano id
-        pano_id = sys.argv[1].split("%")
-        for i, value in enumerate(pano_id):
+        arg = str(sys.argv[1])
+        # If the argument is a direct panoid (22 chars)
+        if len(arg) == 22:
+            print(f"ID: {arg}")
+            return arg
+        # Otherwise, try to extract from a URL
+        parts = arg.split("%")
+        for i, value in enumerate(parts):
             if value == "26panoid":
-                print(f"ID: {pano_id[i + 1][2:]}")
-                return pano_id[i + 1][2:]
+                panoid = parts[i + 1][2:]
+                print(f"ID: {panoid}")
+                return panoid
     except Exception:
         print("Error in get_pano_id()! Check your link!")
         sys.exit(1)
 
 
-def get_date() -> str:  # TODO: This function may be buggy! Fix!
-    # panoids are 22 chars long
-    if len(sys.argv[1]) == 22:
+def get_date() -> str:
+    """
+    Extracts the date (YYYYMMDD) from a Google Street View URL if present
+    Returns an empty string if not found or if a panoid is passed directly
+    """
+
+    arg = str(sys.argv[1])
+    if len(arg) == 22:
         print("PanoID passed, defaulting date to null!")
-        return str("")
-
-    # Grab the date from the link, if applicable
-    try:
-        link = str(sys.argv[1])
-        link = link.split('!2e0!5s', 1)[1]
-        date = link.split('T000000!', 1)[0]
-    except Exception:
-        print("\nDate not found!")
-        print("If you want the date in the image name, please see README.MD")
-        print("If you wish to continue press any key, otherwise ctrl + c")
-        input()
-        print("Defaulting to null!\n")
-        return str("")
-
-    print(f"DATE: {date}")
-    return date + "_"
+        return ""
+    # Use regex to find an 8-digit date before 'T000000!'
+    match = re.search(r'([0-9]{8})T000000!', arg)
+    if match:
+        date = match.group(1)
+        print(f"DATE: {date}")
+        return date + "_"
+    print("Date not found! Defaulting to null!")
+    return ""
 
 
-def get_coords() -> str:  # TODO: This function may be buggy! Fix!
-    # panoids are 22 chars long
-    if len(sys.argv[1]) == 22:
+def get_coords() -> str:
+    """
+    Extracts coordinates from a Google Street View URL if present
+    Returns an empty string if not found or if a panoid is passed directly
+    """
+
+    arg = str(sys.argv[1])
+    if len(arg) == 22:
         print("PanoID passed, defaulting coords to null!")
-        return str("")
+        return ""
+    # Use regex to find coordinates after '@'
+    match = re.search(r'@([\d.\-]+,[\d.\-]+)', arg)
+    if match:
+        coords = match.group(1).replace(',', '_')
+        print(f"COORDS: {coords}")
+        return coords + "_"
+    print("Coords not found! Defaulting to null!")
+    return ""
 
-    # Grab the coords from the link, if applicable
-    link = str(sys.argv[1])
-    link = link.split('@', 1)[1]
-    link = link.split(',3a', 1)[0]
-    coords = link.replace(',', '_')
 
-    print(f"COORDS: {coords}")
-    return coords + "_"
+def create_temp(panoid: str) -> str:
+    """
+    Creates a temporary working directory for the given panoid
+    """
 
-
-def create_temp(id: str) -> str:
-    working_dir = os.path.join(os.getcwd(), f'.tmp-{id}')
+    working_dir = os.path.join(os.getcwd(), f'.tmp-{panoid}')
     os.makedirs(working_dir, exist_ok=True)
     print(f"DIR: {working_dir}")
     return working_dir
 
 
 def clear_temp(working_dir: str) -> None:
+    """
+    Removes the temporary working directory and its contents
+    """
+
     print("Cleaning temp files...")
     shutil.rmtree(working_dir)
 
 
-# Should probably rewrite this to count up from 0, instead of down from 20
 def get_dial_zoom(pano_id: str) -> int:
+    """
+    Determines the highest available zoom level for the panorama
+    """
+
     image_zoom = 20
-    while True:
-        response = requests.get(f"https://streetviewpixels-pa.googleapis.com/v1/tile?cb_client=maps_sv.tactile&panoid={pano_id}&x=0&y=0&zoom={image_zoom}&nbt=1")
+    while image_zoom >= 0:
+        response = requests.get(
+            f"https://streetviewpixels-pa.googleapis.com/v1/tile?cb_client=maps_sv.tactile&panoid={pano_id}&x=0&y=0&zoom={image_zoom}&nbt=1"
+        )
         if response.status_code == 200:
             break
         image_zoom -= 1
-
     return image_zoom
 
 
-# Names.txt is used to stitch the tiles together
-# Only change if absolutely needed!
 def write_names(filenames, path: str):
+    """
+    Writes the list of tile filenames to names.txt for montage
+    """
+
     with open(os.path.join(path, 'names.txt'), 'w') as file:
         file.write('\n'.join(filenames))
 
 
-# Could be beneficial to grab the tile size from the image, incase google ever changes it
-def create_pano_img(txt_path: str, filename: str, x: int, y: int):
-    # Tiles are 512 x 512, needed for exiftool res
-    width = (x + 1) * 512
-    height = (y + 1) * 512
+def create_pano_img(txt_path: str, filename: str, x_tiles: int, y_tiles: int):
+    """
+    Stitches tiles into a panoramic image and crops if needed based on resolution
+    Adds EXIF metadata for panorama viewers
+    """
+
+    tile_size = 512
+    width = (x_tiles + 1) * tile_size
+    height = (y_tiles + 1) * tile_size
 
     print("Creating panoramic image...")
-    subprocess.run(f"montage -adjoin @{txt_path} -tile {x + 1}x{y + 1} -geometry 512x512+0+0 -quality 100 {filename}.jpg", shell=True)
+    subprocess.run(
+        f"montage -adjoin @{txt_path} -tile {x_tiles + 1}x{y_tiles + 1} -geometry {tile_size}x{tile_size}+0+0 -quality 100 {filename}.jpg",
+        shell=True
+    )
 
-    if x == 6:  # Images this old need to be cropped due to overlap and blank space, aka, a little jank
-        width, height = 3328, 1664
-        subprocess.run(f"magick {filename}.jpg -crop {width}x{height}+0+0 {filename}.jpg",shell=True)
+    # Robust cropping for old images based on actual resolution
+    cropped = False
+    try:
+        from PIL import Image
+        img = Image.open(f"{filename}.jpg")
+        actual_width, actual_height = img.size
+        # If the image is larger than 3328x1664, crop to that size (old format)
+        if actual_width > 3328 and actual_height > 1664:
+            print("Cropping old format image to 3328x1664...")
+            img = img.crop((0, 0, 3328, 1664))
+            img.save(f"{filename}.jpg")
+            width, height = 3328, 1664
+            cropped = True
+    except ImportError:
+        # Fallback to ImageMagick crop if PIL(Pillow) is not available
+        if x_tiles == 6:
+            width, height = 3328, 1664
+            subprocess.run(f"magick {filename}.jpg -crop {width}x{height}+0+0 {filename}.jpg", shell=True)
+            cropped = True
+
+    if cropped:
+        print(f"Cropped image to {width}x{height}.")
 
     print("Adding exif metadata...")
-    subprocess.run(f"exiftool -overwrite_original -UsePanoramaViewer=True -ProjectionType=equirectangular "
-                   f"-PoseHeadingDegrees=180.0 -CroppedAreaLeftPixels=0 -FullPanoWidthPixels={width} "
-                   f"-CroppedAreaImageHeightPixels={height} -FullPanoHeightPixels={height} "
-                   f"-CroppedAreaImageWidthPixels={width} -CroppedAreaTopPixels=0 -LargestValidInteriorRectTop=0 "
-                   f"-LargestValidInteriorRectWidth={width} -LargestValidInteriorRectHeight={height} \""
-                   f"{filename}.jpg\"", shell=True)
+    subprocess.run(
+        f"exiftool -overwrite_original -UsePanoramaViewer=True -ProjectionType=equirectangular "
+        f"-PoseHeadingDegrees=180.0 -CroppedAreaLeftPixels=0 -FullPanoWidthPixels={width} "
+        f"-CroppedAreaImageHeightPixels={height} -FullPanoHeightPixels={height} "
+        f"-CroppedAreaImageWidthPixels={width} -CroppedAreaTopPixels=0 -LargestValidInteriorRectTop=0 "
+        f"-LargestValidInteriorRectWidth={width} -LargestValidInteriorRectHeight={height} "
+        f'"{filename}.jpg"',
+        shell=True
+    )
 
 
 def download_tiles(pano_id: str, filepath: str) -> tuple[int, int]:
+    """
+    Downloads all tiles for the panorama and returns the max x and y tile indices
+    """
+
     final_zoom = get_dial_zoom(pano_id)
     x, y = 0, 0
     x_max, y_max = 2048, 2048
@@ -153,43 +205,49 @@ def download_tiles(pano_id: str, filepath: str) -> tuple[int, int]:
             x = 0
             y += 1
 
-        image_link = f"https://streetviewpixels-pa.googleapis.com/v1/tile?cb_client=maps_sv.tactile&panoid={pano_id}&x={x}&y={y}&zoom={final_zoom}&nbt=1"
+        image_link = (
+            f"https://streetviewpixels-pa.googleapis.com/v1/tile?cb_client=maps_sv.tactile"
+            f"&panoid={pano_id}&x={x}&y={y}&zoom={final_zoom}&nbt=1"
+        )
         filename = f"_tmp_{pano_id}_x{x}_y{y}.jpg"
 
         with requests.get(image_link, stream=True) as req:
             if req.status_code == 400:
                 if x_max == 2048:
-                    x_max = x - 1  # Gets returned later, important
+                    x_max = x - 1
                 elif y_max == 2048:
-                    y_max = y - 1  # Also gets returned later
+                    y_max = y - 1
                     write_names(filenames, filepath)
                     print(f"X: {x_max + 1} | Y: {y_max + 1}")
-                    return x_max, y_max  # If y_max is hit, we've reached the end of the image
-            else:  # Downloads the tile
+                    return x_max, y_max
+            else:
                 current_file = os.path.join(filepath, filename)
                 filenames.append(current_file)
-
                 with open(current_file, 'wb') as f:
                     for chunk in req.iter_content(chunk_size=8192):
                         f.write(chunk)
-
-        x += 1  # Must be incr here, earlier causes issues!
+        x += 1
 
 
 def main() -> int:
+    # 1. Parse input and extract identifiers
     pano_id = get_pano_id()
+    date_prefix = get_date()
+    coords_prefix = get_coords()
+    output_prefix = f"{date_prefix}{coords_prefix}{pano_id}"
+    print(f"Output prefix: {output_prefix}")
 
-    date = get_date()
-
-    coords = get_coords()
-
-    print(date + coords + pano_id)
-
+    # 2. Prepare temporary working directory
     temp_dir = create_temp(pano_id)
 
+    # 3. Download all tiles for the panorama
     x_max, y_max = download_tiles(pano_id, temp_dir)
 
-    create_pano_img(os.path.join(temp_dir, 'names.txt'), (date + coords + pano_id), x_max, y_max)
+    # 4. Stitch tiles and add metadata
+    names_txt_path = os.path.join(temp_dir, 'names.txt')
+    create_pano_img(names_txt_path, output_prefix, x_max, y_max)
+
+    # 5. Clean up temporary files
     clear_temp(temp_dir)
 
     print("Script finished!")

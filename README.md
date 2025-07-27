@@ -6,7 +6,7 @@ It *should* grab the highest resolution available for the given panorama, then s
 
 ## Dependencies
 
-python, aria2, imagemagick, exiftool
+python, aria2, imagemagick, exiftool, Pillow (optional)
 
 The original script, and this rewrite were designed to run on Linux, but Windows and MacOS should also work, given the proper dependencies are installed.
 
